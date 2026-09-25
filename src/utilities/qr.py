@@ -151,3 +151,67 @@ def generate_qrcode_mikaelkirken(
         color="#8D008C",
         output_file=output_file,
     )
+
+
+def cli_main() -> None:
+    """CLI entry point for generating QR codes."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Generate modern, rounded SVG QR codes with optional logo embedding."
+    )
+    parser.add_argument(
+        "url",
+        nargs="?",
+        help="The URL or text data to encode into the QR code.",
+    )
+    parser.add_argument(
+        "--image",
+        "-i",
+        dest="png_image",
+        default=None,
+        help="Path to an optional PNG logo image to embed.",
+    )
+    parser.add_argument(
+        "--color",
+        "-c",
+        default="#000000",
+        help="Hex color for QR modules (default: '#000000').",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        dest="output_file",
+        default="qr-code.svg",
+        help="Output SVG filename (default: 'qr-code.svg').",
+    )
+    parser.add_argument(
+        "--mikaelkirken",
+        "-m",
+        action="store_true",
+        help="Use predefined Mikaelkirken branding (purple color and round logo).",
+    )
+
+    args = parser.parse_args()
+
+    if not args.url:
+        parser.print_help()
+        sys.exit(0)
+
+    if args.mikaelkirken:
+        out = args.output_file if args.output_file != "qr-code.svg" else "qrcode.svg"
+        res = generate_qrcode_mikaelkirken(url=args.url, output_file=out)
+        print(f"Generated Mikaelkirken QR code: {res}")
+    else:
+        res = generate_qrcode(
+            url=args.url,
+            png_image=args.png_image,
+            color=args.color,
+            output_file=args.output_file,
+        )
+        print(f"Generated QR code: {res}")
+
+
+if __name__ == "__main__":
+    cli_main()
