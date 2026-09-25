@@ -11,6 +11,7 @@ dependencies = [
 # HER: Registrer nye terminalkommandoer
 [project.scripts]
 generate-qr = "utilities.qr:cli_main"
+convert-pdf = "utilities.pdf:cli_convert_to_pdf"
 
 
 [build-system]

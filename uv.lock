@@ -1,6 +1,6 @@
 version = 1
 revision = 3
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 
 [[package]]
 name = "segno"
@@ -12,9 +12,9 @@ wheels = [
 ]
 
 [[package]]
-name = "tidsskriftet-giroer"
+name = "utilities"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "segno" },
 ]
