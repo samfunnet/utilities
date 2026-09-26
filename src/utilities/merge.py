@@ -1,4 +1,4 @@
-    from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import html
@@ -80,7 +80,9 @@ def _build_combined_xml(xml_mal: str, rader: list[dict[str, Any]]) -> str:
         brevdeler.append(brev_tekst)
 
     ny_tekst = prefiks + "".join(brevdeler)
-    ny_xml = xml_mal[: m.start()] + start_tag + ny_tekst + slutt_tag + xml_mal[m.end() :]
+    ny_xml = (
+        xml_mal[: m.start()] + start_tag + ny_tekst + slutt_tag + xml_mal[m.end() :]
+    )
 
     pb_stil = (
         '<style:style style:name="PB_MERGE" style:family="paragraph">'
@@ -89,7 +91,9 @@ def _build_combined_xml(xml_mal: str, rader: list[dict[str, Any]]) -> str:
         "</style:style>"
     )
     if "<office:automatic-styles>" in ny_xml:
-        ny_xml = ny_xml.replace("<office:automatic-styles>", "<office:automatic-styles>" + pb_stil, 1)
+        ny_xml = ny_xml.replace(
+            "<office:automatic-styles>", "<office:automatic-styles>" + pb_stil, 1
+        )
     elif "<office:automatic-styles/>" in ny_xml:
         ny_xml = ny_xml.replace(
             "<office:automatic-styles/>",
@@ -104,7 +108,9 @@ def _write_odt(mal_filer: dict[str, bytes], xml_content: str, ut_sti: Path) -> N
     """Pakker sammen en ny .odt-fil med oppdatert content.xml."""
     with zipfile.ZipFile(ut_sti, "w") as z:
         if "mimetype" in mal_filer:
-            z.writestr("mimetype", mal_filer["mimetype"], compress_type=zipfile.ZIP_STORED)
+            z.writestr(
+                "mimetype", mal_filer["mimetype"], compress_type=zipfile.ZIP_STORED
+            )
         for fil, data in mal_filer.items():
             if fil == "mimetype":
                 continue
@@ -143,7 +149,9 @@ def merge_odt(
             kilde_excel = get_newest_file("~/Downloads", pattern)
 
     if not kilde_excel or not kilde_excel.exists():
-        raise FileNotFoundError(f"Fant ingen Excel-fil som matcher '{pattern}' i Downloads.")
+        raise FileNotFoundError(
+            f"Fant ingen Excel-fil som matcher '{pattern}' i Downloads."
+        )
 
     print(f"📄 Excel-kilde: {kilde_excel.name}")
     print(f"📝 Mal:         {mal_sti.name}")
@@ -152,7 +160,11 @@ def merge_odt(
     # 2. Les Excel-arket
     wb = openpyxl.load_workbook(kilde_excel, data_only=True)
     if sheet_name:
-        sheet = wb[sheet_name] if isinstance(sheet_name, str) and sheet_name in wb.sheetnames else wb.worksheets[int(sheet_name) - 1]
+        sheet = (
+            wb[sheet_name]
+            if isinstance(sheet_name, str) and sheet_name in wb.sheetnames
+            else wb.worksheets[int(sheet_name) - 1]
+        )
     else:
         sheet = wb.active or wb.worksheets[0]
 
@@ -161,7 +173,9 @@ def merge_odt(
     for row in sheet.iter_rows(min_row=2, max_col=len(headere), values_only=True):
         if not any(row):
             continue
-        rad_dict = {h: ("" if v is None else str(v).strip()) for h, v in zip(headere, row)}
+        rad_dict = {
+            h: ("" if v is None else str(v).strip()) for h, v in zip(headere, row)
+        }
         rader.append(rad_dict)
 
     if limit:
@@ -181,7 +195,9 @@ def merge_odt(
     if combine:
         samlet_tittel = f"{mal_sti.stem}_Samlet"
         odt_ut = ut_mappe / f"{samlet_tittel}.odt"
-        samlet_xml = _build_combined_xml(mal_filer["content.xml"].decode("utf-8"), rader)
+        samlet_xml = _build_combined_xml(
+            mal_filer["content.xml"].decode("utf-8"), rader
+        )
         _write_odt(mal_filer, samlet_xml, odt_ut)
         produserte_odt.append(odt_ut)
     else:
@@ -209,7 +225,9 @@ def merge_odt(
     # 4. Konverter til PDF med convert_to_pdf() i én samlet batch
     genererte_filer: list[Path] = []
     if output_format in ["pdf", "both"]:
-        print(f"🖨️ Konverterer {len(produserte_odt)} fil(er) til PDF i én felles batch...")
+        print(
+            f"🖨️ Konverterer {len(produserte_odt)} fil(er) til PDF i én felles batch..."
+        )
         pdf_filer = convert_to_pdf(produserte_odt, output_dir=ut_mappe)
         genererte_filer.extend(pdf_filer)
 
@@ -226,16 +244,39 @@ def merge_odt(
 
 def cli_merge_odt() -> None:
     """CLI-inngangspunkt for bruk i terminal og MenuLibre (%F)."""
-    parser = argparse.ArgumentParser(description="Flettemotor for LibreOffice ODT og Excel.")
-    parser.add_argument("templates", nargs="*", help="Sti til .odt-mal(er) fra filbehandler (%F)")
+    parser = argparse.ArgumentParser(
+        description="Flettemotor for LibreOffice ODT og Excel."
+    )
+    parser.add_argument(
+        "templates", nargs="*", help="Sti til .odt-mal(er) fra filbehandler (%F)"
+    )
     parser.add_argument("-t", "--template", help="Sti til .odt-malen")
-    parser.add_argument("-o", "--out-dir", help="Mappe der ferdige filer lagres (standard: ./diverse)")
-    parser.add_argument("-n", "--name-format", default="Brev_{i}_{Fornavn}_{Etternavn}", help="Navneformat")
-    parser.add_argument("-p", "--pattern", default="Export*.xlsx", help="Mønster for nyeste Excel-fil")
+    parser.add_argument(
+        "-o", "--out-dir", help="Mappe der ferdige filer lagres (standard: ./diverse)"
+    )
+    parser.add_argument(
+        "-n",
+        "--name-format",
+        default="Brev_{i}_{Fornavn}_{Etternavn}",
+        help="Navneformat",
+    )
+    parser.add_argument(
+        "-p", "--pattern", default="Export*.xlsx", help="Mønster for nyeste Excel-fil"
+    )
     parser.add_argument("-e", "--excel", help="Bruk en spesifikk Excel-fil")
-    parser.add_argument("-f", "--format", choices=["both", "pdf", "odt"], default="both", help="Filformat")
-    parser.add_argument("--combine", action="store_true", help="Slå sammen alle brev til ett dokument")
-    parser.add_argument("-l", "--limit", type=int, help="Begrens antall rader (for testing)")
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=["both", "pdf", "odt"],
+        default="both",
+        help="Filformat",
+    )
+    parser.add_argument(
+        "--combine", action="store_true", help="Slå sammen alle brev til ett dokument"
+    )
+    parser.add_argument(
+        "-l", "--limit", type=int, help="Begrens antall rader (for testing)"
+    )
 
     args = parser.parse_args()
 
@@ -248,7 +289,11 @@ def cli_merge_odt() -> None:
         sys.exit(1)
 
     template_path = Path(template)
-    _notify("Fletting pågår", f"Fletter '{template_path.name}' med nyeste medlemsliste...", icon="x-office-document")
+    _notify(
+        "Fletting pågår",
+        f"Fletter '{template_path.name}' med nyeste medlemsliste...",
+        icon="x-office-document",
+    )
 
     try:
         filer = merge_odt(
