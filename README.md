@@ -1,6 +1,6 @@
 # Utilities
 
-A shared Python library containing common tools and utilities for Mikaelkirken and related automation workflows. Managed with **[uv](https://docs.astral.sh/uv/)**.
+A shared Python library containing common tools and utilities for repetitive automation workflows. Managed with **[uv](https://docs.astral.sh/uv/)**.
 
 ---
 
@@ -31,10 +31,10 @@ All primary functions can be imported directly from the top-level `utilities` pa
 ```python
 from utilities import (
     convert_to_pdf,
-    create_giro_pdf,
     generate_qrcode,
     generate_qrcode_mikaelkirken,
     get_newest_file,
+    merge_odt,
 )
 ```
 
@@ -66,11 +66,9 @@ latest_invoice = get_newest_file(
 
 ---
 
-### 2.2 PDF Utilities (`convert_to_pdf` & `create_giro_pdf`)
+### 2.2 PDF Conversion (`convert_to_pdf`)
 
-#### Converting Office Documents to PDF (`convert_to_pdf`)
-
-Converts Word, Excel, PowerPoint, ODT, and ODS files to PDF using headless LibreOffice.
+Converts Word, Excel, PowerPoint, ODT, and ODS documents to PDF using headless LibreOffice.
 
 > **Requirement:** LibreOffice must be installed on the machine (`apt install libreoffice`, `brew install libreoffice`, or installed on Windows).
 
@@ -89,25 +87,39 @@ output_folder = "~/Documents/PDF_Archive"
 pdf_files = convert_to_pdf(documents, output_dir=output_folder)
 ```
 
-#### Generating Giro / Payment Slip PDFs (`create_giro_pdf`)
+---
 
-Generates standardized Norwegian giro payment slips with KID, account numbers, and optional QR codes.
+### 2.3 Mail Merge Engine (`merge_odt`)
+
+Merges LibreOffice `.odt` templates with data from an Excel spreadsheet (`.xlsx`). Reuses `get_newest_file` to find the newest spreadsheet and `convert_to_pdf` for fast batch PDF generation.
+
+* **Template tags:** Supports `<Column>`, `«Column»`, `{{ Column }}`, or standard LibreOffice database fields (`F4`).
+* **Safe formatting:** Missing columns in the spreadsheet will not cause crashes.
+* **Batch or single document:** Can output individual letters or combine everything into one document.
 
 ```python
-from utilities import create_giro_pdf
+from utilities import merge_odt
 
-create_giro_pdf(
-    output_path="giro.pdf",
-    account_number="1234.56.78903",
-    kid="12345678",
-    amount=500.0,
-    payer_name="Ola Nordmann",
+# Example A: Standard merge (auto-detects newest Export*.xlsx in Downloads)
+generated_files = merge_odt(
+    template_path="~/Templates/WelcomeLetter.odt",
+    output_dir="~/Documents/Letters",
+    name_format="Letter_{i}_{Fornavn}_{Etternavn}",
+    output_format="both",  # 'both', 'pdf', or 'odt'
+)
+
+# Example B: Bulk print mode (combine all recipients into one PDF)
+combined_pdf = merge_odt(
+    template_path="~/Templates/MemberLetter.odt",
+    output_dir="~/Documents/Print",
+    output_format="pdf",
+    combine=True,
 )
 ```
 
 ---
 
-### 2.3 QR Code Utilities (`generate_qrcode`)
+### 2.4 QR Code Utilities (`generate_qrcode`)
 
 Generates high-resolution QR codes with optional church branding and styling.
 
@@ -140,19 +152,14 @@ uv run convert-pdf document1.docx document2.xlsx
 
 #### Run On-Demand via `uvx` (No Local Clone Required)
 
-You can run the tool directly from GitHub without cloning or installing the package locally:
-
 ```bash
-# Run latest main branch:
-uvx --from git+https://github.com/samfunnet/utilities convert-pdf file1.xlsx
-
-# Pin to a specific commit or tag for deterministic execution:
-uvx --from git+https://github.com/samfunnet/utilities@a1b2c3d convert-pdf file1.xlsx
+# Run pinned to a specific commit:
+uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> convert-pdf file1.xlsx
 ```
 
 #### Desktop Integration (MenuLibre / File Manager "Open With")
 
-In MenuLibre or your `.desktop` launcher, set the `Exec` command to:
+In MenuLibre, set the `Exec` command to:
 
 ```text
 /home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> convert-pdf %F
@@ -160,7 +167,33 @@ In MenuLibre or your `.desktop` launcher, set the `Exec` command to:
 
 ---
 
-### 3.2 `generate-qr`
+### 3.2 `merge-odt` (Universal Mail Merge Engine)
+
+Merges a selected `.odt` template with the newest Excel export from your downloads folder.
+
+```bash
+# Run locally with options:
+uv run merge-odt -t "Mal.odt" -o "~/diverse" -n "{Etternavn}_{Fornavn}"
+```
+
+#### Desktop Integration (MenuLibre / Right-Click on `.odt` files)
+
+Associate with the `.odt` mimetype (`application/vnd.oasis.opendocument.text`):
+
+```text
+# Standard individual letters:
+/home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> merge-odt %F
+
+# With custom output directory and custom filename format:
+/home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> merge-odt -o ~/diverse -n "Medlem_{Medlemsnummer}_{Etternavn}" %F
+
+# Bulk print: Combine all recipients into one single PDF:
+/home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> merge-odt --combine -f pdf -o ~/diverse %F
+```
+
+---
+
+### 3.3 `generate-qr`
 
 Generates a QR code directly from the command line:
 
@@ -180,7 +213,8 @@ utilities/
 │   └── utilities/
 │       ├── __init__.py    # Exports all public utilities
 │       ├── files.py       # File finding & filesystem utilities
-│       ├── pdf.py         # LibreOffice conversion & Giro generator
+│       ├── merge.py       # LibreOffice ODT + Excel mail merge engine
+│       ├── pdf.py         # LibreOffice headless PDF converter & CLI
 │       └── qr.py          # QR code generation & CLI
 ```
 
@@ -201,4 +235,4 @@ Clone and install dependencies:
 git clone https://github.com/samfunnet/utilities.git
 cd utilities
 uv sync
-```j
+```
