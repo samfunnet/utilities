@@ -248,7 +248,7 @@ def cli_merge_odt() -> None:
         description="Flettemotor for LibreOffice ODT og Excel."
     )
     parser.add_argument(
-        "templates", nargs="*", help="Sti til .odt-mal(er) fra filbehandler (%F)"
+        "templates", nargs="*", help="Sti til .odt-mal(er) fra filbehandler (%%F)"
     )
     parser.add_argument("-t", "--template", help="Sti til .odt-malen")
     parser.add_argument(
