@@ -1,14 +1,12 @@
 # Utilities
 
-A shared Python library containing common tools and utilities for repetitive automation workflows. Managed with **[uv](https://docs.astral.sh/uv/)**.
+A shared Python library containing common tools and utilities for repetitive automation workflows. Managed with `uv`.
 
 ---
 
 ## 1. Installation
 
-### Add to another project using `uv`
-
-Install the latest version directly from GitHub:
+Add to another project using `uv`:
 
 ```bash
 uv add git+https://github.com/samfunnet/utilities
@@ -31,6 +29,7 @@ All primary functions can be imported directly from the top-level `utilities` pa
 ```python
 from utilities import (
     convert_to_pdf,
+    fnr_detaljer,
     generate_qrcode,
     generate_qrcode_mikaelkirken,
     get_newest_file,
@@ -40,199 +39,151 @@ from utilities import (
 
 ---
 
-### 2.1 File Utilities (`get_newest_file`)
+### 2.1 File Utilities
 
-Locates the most recently modified file in a directory matching a wildcard pattern or regular expression.
+#### `get_newest_file(directory, pattern="*") -> Path | None`
 
-* **Cross-platform**: Automatically resolves `~` (home directory) and paths across Windows, macOS, and Linux.
-* **Flexible matching**: Supports shell wildcards/globs (`Export*.xlsx`) and regular expressions (`r"^Export_\d+\.xlsx$"`).
+Finds the most recently modified file in a directory matching a glob pattern.
 
 ```python
+from pathlib import Path
 from utilities import get_newest_file
 
-# 1. Using wildcard (glob) pattern
-latest_export = get_newest_file("~/syncthing/Downloads", "Export*.xlsx")
-if latest_export:
-    print(f"Path: {latest_export}")
-    print(f"Filename: {latest_export.name}")
-
-# 2. Using Regular Expressions (regex)
-latest_invoice = get_newest_file(
-    folder_path="~/Documents/Invoices",
-    pattern=r"^Faktura_\d{4}-\d{2}\.pdf$",
-    is_regex=True,
-)
+latest = get_newest_file(Path("/path/to/downloads"), "*.xlsx")
+if latest:
+    print(f"Latest file: {latest}")
 ```
 
 ---
 
-### 2.2 PDF Conversion (`convert_to_pdf`)
+### 2.2 PDF Conversion
 
-Converts Word, Excel, PowerPoint, ODT, and ODS documents to PDF using headless LibreOffice.
+#### `convert_to_pdf(input_file, output_file=None, timeout=60) -> Path`
 
-> **Requirement:** LibreOffice must be installed on the machine (`apt install libreoffice`, `brew install libreoffice`, or installed on Windows).
+Converts document formats supported by LibreOffice (ODT, DOCX, XLSX, etc.) to PDF using a headless LibreOffice instance.
 
 ```python
-from utilities import convert_to_pdf, get_newest_file
+from pathlib import Path
+from utilities import convert_to_pdf
 
-# Example A: Convert the newest export file to PDF
-latest_excel = get_newest_file("~/syncthing/Downloads", "Export*.xlsx")
-if latest_excel:
-    pdf_files = convert_to_pdf(latest_excel)
-    print(f"Created: {pdf_files[0]}")
-
-# Example B: Batch-convert multiple documents to a specific archive folder
-documents = ["rapport.docx", "budsjett.xlsx"]
-output_folder = "~/Documents/PDF_Archive"
-pdf_files = convert_to_pdf(documents, output_dir=output_folder)
+pdf = convert_to_pdf(Path("report.odt"))
+# Creates report.pdf in the same directory
 ```
 
 ---
 
-### 2.3 Mail Merge Engine (`merge_odt`)
+### 2.3 Mail Merge Engine
 
-Merges LibreOffice `.odt` templates with data from an Excel spreadsheet (`.xlsx`). Reuses `get_newest_file` to find the newest spreadsheet and `convert_to_pdf` for fast batch PDF generation.
+#### `merge_odt(template_path, data_source, output_dir, name_template=None, generate_pdf=False, ...)`
 
-* **Template tags:** Supports `<Column>`, `«Column»`, `{{ Column }}`, or standard LibreOffice database fields (`F4`).
-* **Safe formatting:** Missing columns in the spreadsheet will not cause crashes.
-* **Batch or single document:** Can output individual letters or combine everything into one document.
+Performs mail merge operations using LibreOffice ODT templates and tabular data sources (Excel `.xlsx` or CSV). Uses Jinja-like syntax (`{{ FieldName }}`) inside the template document.
 
 ```python
+from pathlib import Path
 from utilities import merge_odt
 
-# Example A: Standard merge (auto-detects newest Export*.xlsx in Downloads)
-generated_files = merge_odt(
-    template_path="~/Templates/WelcomeLetter.odt",
-    output_dir="~/Documents/Letters",
-    name_format="Letter_{i}_{Fornavn}_{Etternavn}",
-    output_format="both",  # 'both', 'pdf', or 'odt'
-)
-
-# Example B: Bulk print mode (combine all recipients into one PDF)
-combined_pdf = merge_odt(
-    template_path="~/Templates/MemberLetter.odt",
-    output_dir="~/Documents/Print",
-    output_format="pdf",
-    combine=True,
+created_files = merge_odt(
+    template_path=Path("brev_mal.odt"),
+    data_source=Path("mottakere.xlsx"),
+    output_dir=Path("./utsendelser"),
+    name_template="{Etternavn}_{Fornavn}",
+    generate_pdf=True,
 )
 ```
 
 ---
 
-### 2.4 QR Code Utilities (`generate_qrcode`)
+### 2.4 QR Code Utilities
 
-Generates high-resolution QR codes with optional church branding and styling.
+#### `generate_qrcode(data, output_file, scale=10, border=4, fill_color="black", back_color="white") -> Path`
+
+Generates standard QR codes.
 
 ```python
-from utilities import generate_qrcode, generate_qrcode_mikaelkirken
+from pathlib import Path
+from utilities import generate_qrcode
 
-# 1. Standard QR Code
-img = generate_qrcode("https://mikaelkirken.no")
-img.save("qr.png")
+generate_qrcode("https://mikaelkirken.no", Path("nettside.png"))
+```
 
-# 2. Mikaelkirken branded QR Code
-img_branded = generate_qrcode_mikaelkirken("123456", "1234.56.78903")
-img_branded.save("mikaelkirken_qr.png")
+#### `generate_qrcode_mikaelkirken(data, output_file, scale=10) -> Path`
+
+Generates Mikaelkirken-branded QR codes using official colors (#970000 on warm background).
+
+```python
+from pathlib import Path
+from utilities import generate_qrcode_mikaelkirken
+
+generate_qrcode_mikaelkirken("https://mikaelkirken.no", Path("mikaelkirken.png"))
+```
+
+---
+
+### 2.5 Norwegian Identity Numbers (Fødselsnummer)
+
+#### `fnr_detaljer(fnr_kolonne="Fødselsnummer") -> list[pl.Expr]`
+
+Returns composable Polars expressions that parse Norwegian identity numbers (both standard fødselsnummer and D-nummer) into birth date and gender.
+
+- **`fodsels_dato` (`pl.Date`)**: Resolves the full 4-digit birth year using official Skatteetaten century rules (1800s, 1900s, 2000s) based on the individual digits (siffer 7–9), and automatically adjusts D-numbers. Invalid dates resolve to `null` safely.
+- **`kjønn` (`pl.String`)**: Determines gender (`"Mann"` / `"Kvinne"`) from the 9th digit (odd = male, even = female).
+
+```python
+import polars as pl
+from utilities import fnr_detaljer
+
+# Sample data (standard fnr, 2000s fnr, and D-number)
+df = pl.DataFrame({
+    "Navn": ["Kari Nordmann", "Ola Nordmann", "D-nummer Eksempel"],
+    "Fødselsnummer": ["15038512346", "01010561234", "45089212345"],
+})
+
+# Derive 'fodsels_dato' and 'kjønn'
+df = df.with_columns(fnr_detaljer("Fødselsnummer"))
+print(df)
+```
+
+**Output:**
+
+```text
+shape: (3, 4)
+┌───────────────────┬───────────────┬──────────────┬────────┐
+│ Navn              ┆ Fødselsnummer ┆ fodsels_dato ┆ kjønn  │
+│ ---               ┆ ---           ┆ ---          ┆ ---    │
+│ str               ┆ str           ┆ date         ┆ str    │
+╞═══════════════════╪═══════════════╪══════════════╪════════╡
+│ Kari Nordmann     ┆ 15038512346   ┆ 1985-03-15   ┆ Kvinne │
+│ Ola Nordmann      ┆ 01010561234   ┆ 2005-01-01   ┆ Mann   │
+│ D-nummer Eksempel ┆ 45089212345   ┆ 1992-08-05   ┆ Mann   │
+└───────────────────┴───────────────┴──────────────┴────────┘
 ```
 
 ---
 
 ## 3. Command-Line Tools (CLI)
 
-The package provides CLI entry points configured in `pyproject.toml`.
+The library exposes standard command-line entry points.
 
-### 3.1 `convert-pdf` (Batch Office-to-PDF Converter)
+### 3.1 `convert-pdf`
 
-Converts one or multiple documents to PDF and triggers native desktop notifications (`notify-send`) when finished.
-
-```bash
-# Run locally within the repository:
-uv run convert-pdf document1.docx document2.xlsx
-```
-
-#### Run On-Demand via `uvx` (No Local Clone Required)
+Convert documents directly from the terminal:
 
 ```bash
-# Run pinned to a specific commit:
-uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> convert-pdf file1.xlsx
+convert-pdf document.odt
+convert-pdf document.docx --output /path/to/output.pdf
 ```
 
-#### Desktop Integration (MenuLibre / File Manager "Open With")
+### 3.2 `merge-odt`
 
-In MenuLibre, set the `Exec` command to:
+Run mail merge tasks without writing Python code:
 
-```text
-/home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> convert-pdf %F
+```bash
+merge-odt mal.odt data.xlsx --pdf --output-dir ./utsendelser
 ```
 
 ---
 
-### 3.2 `merge-odt` (Universal Mail Merge Engine)
+## Requirements
 
-Merges a selected `.odt` template with the newest Excel export from your downloads folder.
-
-```bash
-# Run locally with options:
-uv run merge-odt -t "Mal.odt" -o "~/diverse" -n "{Etternavn}_{Fornavn}"
-```
-
-#### Desktop Integration (MenuLibre / Right-Click on `.odt` files)
-
-Associate with the `.odt` mimetype (`application/vnd.oasis.opendocument.text`):
-
-```text
-# Standard individual letters:
-/home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> merge-odt %F
-
-# With custom output directory and custom filename format:
-/home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> merge-odt -o ~/diverse -n "Medlem_{Medlemsnummer}_{Etternavn}" %F
-
-# Bulk print: Combine all recipients into one single PDF:
-/home/jviksaas/.local/bin/uvx --from git+https://github.com/samfunnet/utilities@<commit-hash> merge-odt --combine -f pdf -o ~/diverse %F
-```
-
----
-
-### 3.3 `generate-qr`
-
-Generates a QR code directly from the command line:
-
-```bash
-uv run generate-qr "123456" "1234.56.78903"
-```
-
----
-
-## 4. Project Structure
-
-```text
-utilities/
-├── pyproject.toml
-├── README.md
-├── src/
-│   └── utilities/
-│       ├── __init__.py    # Exports all public utilities
-│       ├── files.py       # File finding & filesystem utilities
-│       ├── merge.py       # LibreOffice ODT + Excel mail merge engine
-│       ├── pdf.py         # LibreOffice headless PDF converter & CLI
-│       └── qr.py          # QR code generation & CLI
-```
-
-### Adding New Utilities
-
-1. **Create a new module** in `src/utilities/` (e.g. `src/utilities/dates.py`).
-2. **Export the functions** in `src/utilities/__init__.py`.
-3. If exposing a CLI command, register it under `[project.scripts]` in `pyproject.toml`.
-4. Run `uv sync` to update the environment.
-
----
-
-## 5. Development
-
-Clone and install dependencies:
-
-```bash
-git clone https://github.com/samfunnet/utilities.git
-cd utilities
-uv sync
-```
+- Python >= 3.12
+- LibreOffice (required for `convert_to_pdf` and PDF generation in `merge_odt`)
