@@ -15,7 +15,18 @@ from utilities.pdf import _notify, convert_to_pdf
 
 
 class SafeDict(dict):
-    """Sørger for at manglende kolonner i malen ikke krasjer navneformateringen."""
+    """Sørger for at manglende kolonner i malen ikke krasjer navneformateringen,
+    og tillater treff uavhengig av store/små bokstaver."""
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self:
+            return super().__getitem__(key)
+        # Sjekk case-insensitive og med space/understrek
+        key_norm = key.lower().replace(" ", "_")
+        for k, v in self.items():
+            if k.lower().replace(" ", "_") == key_norm:
+                return v
+        return ""
 
     def __missing__(self, key: str) -> str:
         return ""
@@ -117,12 +128,11 @@ def _write_odt(mal_filer: dict[str, bytes], xml_content: str, ut_sti: Path) -> N
             innhold = xml_content.encode("utf-8") if fil == "content.xml" else data
             z.writestr(fil, innhold, compress_type=zipfile.ZIP_DEFLATED)
 
-
 def merge_odt(
     template_path: str | Path,
     excel_path: str | Path | None = None,
     output_dir: str | Path | None = None,
-    name_format: str = "Brev_{i}_{Fornavn}_{Etternavn}",
+    name_format: str = "{mal}_{Fornavn}_{Etternavn}",
     pattern: str = "Export*.xlsx",
     output_format: str = "both",
     combine: bool = False,
@@ -133,6 +143,12 @@ def merge_odt(
     mal_sti = Path(template_path).expanduser().resolve()
     if not mal_sti.exists():
         raise FileNotFoundError(f"Finner ikke mal-filen: {mal_sti}")
+
+    # Fjern 'mal' som første ord i navnet (case-insensitive) hvis det finnes
+    # F.eks. "mal ny medlem" -> "ny medlem", "Mal_Purring" -> "Purring"
+    mal_tittel = re.sub(r"^mal[\s_\-:]+", "", mal_sti.stem, flags=re.IGNORECASE).strip()
+    if not mal_tittel:
+        mal_tittel = mal_sti.stem
 
     if output_dir:
         ut_mappe = Path(output_dir).expanduser().resolve()
@@ -154,8 +170,8 @@ def merge_odt(
         )
 
     print(f"📄 Excel-kilde: {kilde_excel.name}")
-    print(f"📝 Mal:         {mal_sti.name}")
-    print(f"📁 Lagres i:    {ut_mappe}")
+    print(f"📝 Mal: {mal_sti.name} (bruker tittel: '{mal_tittel}')")
+    print(f"📁 Lagres i: {ut_mappe}")
 
     # 2. Les Excel-arket
     wb = openpyxl.load_workbook(kilde_excel, data_only=True)
@@ -193,7 +209,7 @@ def merge_odt(
 
     # MODUS 1: Samlet dokument (--combine)
     if combine:
-        samlet_tittel = f"{mal_sti.stem}_Samlet"
+        samlet_tittel = f"{mal_tittel}_Samlet"
         odt_ut = ut_mappe / f"{samlet_tittel}.odt"
         samlet_xml = _build_combined_xml(
             mal_filer["content.xml"].decode("utf-8"), rader
@@ -202,21 +218,33 @@ def merge_odt(
         produserte_odt.append(odt_ut)
     else:
         # MODUS 2: Individuelle brev
+        format_streng = name_format or "{mal}_{Fornavn}_{Etternavn}"
         for i, rad in enumerate(rader, 1):
-            safe_data = SafeDict(rad, i=i, nr=i)
+            safe_data = SafeDict(
+                rad,
+                i=i,
+                nr=i,
+                mal=mal_tittel,
+                mal_navn=mal_tittel,
+                template=mal_tittel,
+            )
             try:
-                filnavn_base = name_format.format_map(safe_data).strip()
+                filnavn_base = format_streng.format_map(safe_data).strip()
             except Exception:
-                filnavn_base = f"Brev_{i}"
+                filnavn_base = f"{mal_tittel}_{i}"
 
             # Vask filnavnet for ugyldige tegn og doble/hengende understreker
-            trygt_navn = re.sub(r'[\\/*?:"<>|]', "", filnavn_base).strip()
+            trygt_navn = re.sub(r'[/\\*?:"<>|]', "", filnavn_base).strip()
             trygt_navn = re.sub(r"_+", "_", trygt_navn).strip("_-")
 
-            if not trygt_navn or trygt_navn == "Brev":
-                trygt_navn = f"Brev_{i}"
+            if not trygt_navn or trygt_navn == mal_tittel:
+                trygt_navn = f"{mal_tittel}_{i}"
 
             odt_ut = ut_mappe / f"{trygt_navn}.odt"
+
+            # Kollisjonssikring i tilfelle to personer har identisk navn
+            if odt_ut in produserte_odt:
+                odt_ut = ut_mappe / f"{trygt_navn}_{i}.odt"
 
             xml = _substitute_xml(mal_filer["content.xml"].decode("utf-8"), rad)
             _write_odt(mal_filer, xml, odt_ut)
@@ -242,6 +270,7 @@ def merge_odt(
     return genererte_filer
 
 
+
 def cli_merge_odt() -> None:
     """CLI-inngangspunkt for bruk i terminal og MenuLibre (%F)."""
     parser = argparse.ArgumentParser(
@@ -254,12 +283,14 @@ def cli_merge_odt() -> None:
     parser.add_argument(
         "-o", "--out-dir", help="Mappe der ferdige filer lagres (standard: ./diverse)"
     )
+
     parser.add_argument(
         "-n",
         "--name-format",
-        default="Brev_{i}_{Fornavn}_{Etternavn}",
-        help="Navneformat",
+        default="{mal}_{Fornavn}_{Etternavn}",
+        help="Navneformat (standard: '{mal}_{Fornavn}_{Etternavn}')",
     )
+    
     parser.add_argument(
         "-p", "--pattern", default="Export*.xlsx", help="Mønster for nyeste Excel-fil"
     )
