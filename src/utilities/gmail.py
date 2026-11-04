@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from simplegmail import Gmail
 
@@ -96,15 +96,51 @@ class EmailDraft(dict):
         return self.get("id")
 
 
-def create_email_draft(
-    to: str,
+def _prepare_email_kwargs(
+    to: str | Sequence[str],
     subject: str,
     body_html: str | None = None,
     body_text: str | None = None,
     attachments: Sequence[Path | str] | None = None,
     sender: str = "me",
-    cc: list[str] | None = None,
-    bcc: list[str] | None = None,
+    cc: Sequence[str] | str | None = None,
+    bcc: Sequence[str] | str | None = None,
+    signature: bool = False,
+    client: Gmail | None = None,
+) -> tuple[Gmail, dict[str, Any]]:
+    """Forbereder og normaliserer felles parametere og Gmail-klient for sending og utkast."""
+    if client is None:
+        client = get_gmail()
+
+    to_str = to if isinstance(to, str) else ", ".join(to)
+    att_paths = [str(p) for p in attachments] if attachments else None
+    cc_list = [cc] if isinstance(cc, str) else list(cc) if cc else None
+    bcc_list = [bcc] if isinstance(bcc, str) else list(bcc) if bcc else None
+
+    kwargs: dict[str, Any] = {
+        "sender": sender,
+        "to": to_str,
+        "subject": subject,
+        "msg_html": body_html,
+        "msg_plain": body_text,
+        "attachments": att_paths,
+        "cc": cc_list,
+        "bcc": bcc_list,
+        "signature": signature,
+    }
+    return client, kwargs
+
+
+def create_email_draft(
+    to: str | Sequence[str],
+    subject: str,
+    body_html: str | None = None,
+    body_text: str | None = None,
+    attachments: Sequence[Path | str] | None = None,
+    sender: str = "me",
+    cc: Sequence[str] | str | None = None,
+    bcc: Sequence[str] | str | None = None,
+    signature: bool = False,
     client: Gmail | None = None,
 ) -> EmailDraft:
     """Oppretter et utkast i Gmail.
@@ -112,22 +148,57 @@ def create_email_draft(
     Støtter både HTML-kropp, tekst og vedlegg (godtar Path-objekter).
     'sender' er satt til 'me' som standard (din egen Workspace-bruker).
     """
-    if client is None:
-        client = get_gmail()
-
-    # Konverter eventuelle Path-objekter i vedlegg til tekststier
-    att_paths = [str(p) for p in attachments] if attachments else None
-
-    # simplegmail krever 'sender', men tar ikke 'reply_to' på utkast
-    draft_dict = client.create_draft(
-        sender=sender,
+    client, kwargs = _prepare_email_kwargs(
         to=to,
         subject=subject,
-        msg_html=body_html,
-        msg_plain=body_text,
-        attachments=att_paths,
+        body_html=body_html,
+        body_text=body_text,
+        attachments=attachments,
+        sender=sender,
         cc=cc,
         bcc=bcc,
+        signature=signature,
+        client=client,
     )
 
+    # simplegmail krever 'sender', men tar ikke 'reply_to' på utkast
+    draft_dict = client.create_draft(**kwargs)
     return EmailDraft(draft_dict)
+
+
+def send_email(
+    to: str | Sequence[str],
+    subject: str,
+    body_html: str | None = None,
+    body_text: str | None = None,
+    attachments: Sequence[Path | str] | None = None,
+    sender: str = "me",
+    cc: Sequence[str] | str | None = None,
+    bcc: Sequence[str] | str | None = None,
+    signature: bool = False,
+    reply_to: Message | None = None,
+    client: Gmail | None = None,
+) -> Message:
+    """Sender en e-post direkte via Gmail.
+
+    Støtter både HTML-kropp, tekst og vedlegg (godtar Path-objekter).
+    'sender' er satt til 'me' som standard (din egen Workspace-bruker).
+    'reply_to' kan settes til et Message-objekt for å svare i en eksisterende tråd.
+    """
+    client, kwargs = _prepare_email_kwargs(
+        to=to,
+        subject=subject,
+        body_html=body_html,
+        body_text=body_text,
+        attachments=attachments,
+        sender=sender,
+        cc=cc,
+        bcc=bcc,
+        signature=signature,
+        client=client,
+    )
+
+    if reply_to is not None:
+        kwargs["reply_to"] = reply_to
+
+    return client.send_message(**kwargs)

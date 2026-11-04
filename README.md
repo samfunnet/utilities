@@ -166,113 +166,138 @@ shape: (3, 4)
 
 ### 2.6 Gmail Utilities
 
-Tools for searching, reading, and creating email drafts in Gmail via the official Gmail API (backed by `simplegmail`).
+Integrates with Gmail via `simplegmail` to search messages, create drafts, and send emails directly.
 
-#### Setup & Authentication
+#### Authentication & Setup
 
-The Gmail utilities look for authentication credentials in a centralized directory by default:
+Authentication relies on Google OAuth 2.0. By default, credentials are expected in:
 
-- **Linux/macOS:** `~/.config/credentials/gmail/`
-- **Windows:** `C:\Users\<Username>\.config\credentials\gmail\`
+```text
+~/.config/credentials/gmail/
+├── client_secret.json
+└── gmail_token.json  (generated automatically after first run)
+```
 
-1. **Google Cloud Console:** Create a project, enable the **Gmail API**, and configure the **Google Auth Platform** (OAuth Consent Screen).  
-   *Tip for Google Workspace:* Set Audience to **Internal** (no verification needed, tokens never expire).
-2. **Credentials:** Create an **OAuth Client ID** of type **Desktop App**, download the JSON file, and save it as:  
-   `~/.config/credentials/gmail/client_secret.json`
-3. **First-time Login:** On the first execution, a browser window opens automatically to authorize your account and generates `gmail_token.json` in the same directory. Subsequent runs are fully automated and headless.
+1. **Google Cloud Console Setup:**
+   - Enable the **Gmail API** in your Google Cloud project.
+   - Configure the **OAuth Consent Screen** (User type: Internal for Workspace, or External with test users added).
+   - Create credentials for **OAuth 2.0 Client ID** with Application type set to **Desktop app**.
+   - Download the client secret JSON file and save it as:
+     `~/.config/credentials/gmail/client_secret.json`
+
+2. **First-time Authentication:**
+   - The first time any Gmail function (`get_gmail()`, `create_email_draft()`, or `send_email()`) runs without an existing token, `simplegmail` opens a browser window (or prints an authorization link) asking you to log in and approve permissions.
+   - Once approved, `gmail_token.json` is created automatically in the same folder.
+   - All subsequent executions reuse this token silently without user interaction.
+
+3. **Custom Directory:**
+   - Pass a custom path using `get_gmail(creds_dir=...)` if you want to store credentials elsewhere, or pass a pre-authenticated `client` into any of the email functions.
 
 ---
 
 #### `get_gmail(creds_dir=None) -> Gmail`
 
-Connects to Gmail using the stored credentials and returns an authenticated `Gmail` client instance.
+Returns an authenticated `simplegmail.Gmail` client. Checks `DEFAULT_CREDS_DIR` (`~/.config/credentials/gmail/`) by default.
 
 ```python
 from utilities import get_gmail
 
-gmail = get_gmail()
-print(f"Connected as: {gmail.user}")
-```
-
----
-
-#### `find_email(query=None, sender=None, subject=None, label=None, unread_only=False, client=None) -> Message | None`
-
-Finds the single most recent email matching the given criteria. Returns a `Message` object, or `None` if no matching email was found.
-
-**Key attributes on the returned `Message` object:**
-
-- `email.subject`: Subject line.
-- `email.sender`: Sender's name and email address.
-- `email.plain`: Plain text body.
-- `email.html`: HTML body.
-- `email.attachments`: List of attachment objects.
-- `email.mark_as_read()`: Marks the email as read in Gmail.
-
-```python
-from utilities import find_email
-
-# Find the latest unread signing notification from Dokobit
-email = find_email(
-    sender="notifications@dokobit.com",
-    subject="Dokumentet er signert.",
-    unread_only=True,
-)
-
-if email:
-    print(f"Found email from {email.date}: {email.subject}")
-    print(f"Content:\n{email.plain}")
-
-    # Download attachments if present
-    for att in email.attachments:
-        print(f"Downloading: {att.filename}")
-        att.save()
-
-    # Mark as read so subsequent runs ignore it
-    email.mark_as_read()
+client = get_gmail()
 ```
 
 ---
 
 #### `find_emails(query=None, sender=None, subject=None, label=None, unread_only=False, max_results=None, client=None) -> list[Message]`
 
-Searches for multiple emails matching specific criteria or a raw Gmail search query string. Returns a list of `Message` objects sorted newest first.
+Searches messages matching criteria or a raw Gmail search string. Automatically builds a query if specific arguments (`sender`, `subject`, `label`, `unread_only`) are provided.
 
 ```python
 from utilities import find_emails
 
-# Search using filters or standard Gmail search syntax
-messages = find_emails(
-    sender="post@mikaelkirken.no",
-    unread_only=True,
-    max_results=5,
-)
+# Search by specific filter
+messages = find_emails(sender="noreply@example.com", unread_only=True)
 
+# Or using raw Gmail query syntax
+messages = find_emails(query="has:attachment newer_than:2d")
 for msg in messages:
-    print(f"[{msg.date}] {msg.subject} (from: {msg.sender})")
+    print(msg.subject, msg.date)
 ```
 
 ---
 
-#### `create_email_draft(to, subject, body_html=None, body_text=None, attachments=None, sender="me", cc=None, bcc=None, client=None) -> EmailDraft`
+#### `find_email(query=None, sender=None, subject=None, label=None, unread_only=False, client=None) -> Message | None`
 
-Creates a draft email directly in your Gmail account. Seamlessly accepts `Path` objects in the `attachments` list.
+Convenience function returning only the single newest email matching the criteria, or `None` if no messages match.
+
+```python
+from utilities import find_email
+
+msg = find_email(subject="Invoice", unread_only=True)
+if msg:
+    print(f"Latest invoice ID: {msg.id}")
+```
+
+---
+
+#### `create_email_draft(to, subject, body_html=None, body_text=None, attachments=None, sender="me", cc=None, bcc=None, signature=False, client=None) -> EmailDraft`
+
+Creates a draft email in Gmail without sending it immediately. Returns an `EmailDraft` object where both dict indexing (`draft['id']`) and attribute access (`draft.id`) work.
+
+- **`to`**: Recipient email address (`str`) or list of recipients (`Sequence[stri`).
+- **`attachments`**: Optional list of files as `Path` objects or path strings (`str`).
+- **`sender`**: Defaults to `"me"` (the authenticated user).
+- **`cc` / `bcc`**: Optional recipient(s) as `str` or `list[str]`.
+- **`signature`**: Appends your Gmail signature if set to `True` (default `False`).
 
 ```python
 from pathlib import Path
-from utilities import convert_to_pdf, create_email_draft
+from utilities import create_email_draft
 
-# Pipeline: Convert a letter template to PDF, then draft an email
-pdf_file = convert_to_pdf(Path("kontrakt.odt"))
+SENDER = '"Mikaelkirken, Kristensamfunnet i hovedstaden" <post@mikaelkirken.no>'
+
 
 draft = create_email_draft(
-    to="medlem@mikaelkirken.no",
-    subject="Signert avtale og bekreftelse",
-    body_html="<h3>Hei!</h3><p>Vedlagt oversendes den signerte avtalen i PDF-format.</p>",
-    attachments=[pdf_file],  # Accepts Path objects directly
+    sender=SENDER,
+    to="colleague@example.com",
+    subject="Monthly Report (Draft)",
+    body_html="<p>Hi,</p><p>Please review the attached report draft.</p>",
+    body_text="Hi, please review the attached report draft.",
+    attachments=[Path("./reports/monthly.pdf")],
 )
 
 print(f"Draft created with ID: {draft.id}")
+```
+
+---
+
+#### `send_email(to, subject, body_html=None, body_text=None, attachments=None, sender="me", cc=None, bcc=None, signature=False, reply_to=None, client=None) -> Message`
+
+Directly sends an email via Gmail. Returns the sent `simplegmail.message.Message` object.
+
+- **`to`**: Recipient email address (`str`) or list of recipients (`Sequence[str]`).
+- **`attachments`**: Optional list of files as `Path` objects or path strings (`str`).
+- **`sender`**: Defaults to `"me"` (the authenticated user).
+- **`cc` / `bcc`**: Optional recipient(s) as `str` or `list[str]`.
+- **`signature`**: Appends your Gmail signature if set to `True` (default `False`).
+- **`reply_to`**: Optional `Message` object to reply within an existing Gmail thread.
+
+```python
+from pathlib import Path
+from utilities import send_email
+
+SENDER = '"Mikaelkirken, Kristensamfunnet i hovedstaden" <post@mikaelkirken.no>'
+
+msg = send_email(
+    sender=SENDER,
+    to=["alice@example.com", "bob@example.com"],
+    subject="Project Status Update",
+    body_html="<h1>Status Update</h1><p>The project is on track!</p>",
+    body_text="Status Update: The project is on track!",
+    attachments=[Path("./docs/overview.pdf")],
+    cc="manager@example.com",
+)
+
+print(f"Email sent with ID: {msg.id}")
 ```
 
 ---
