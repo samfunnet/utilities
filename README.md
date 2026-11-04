@@ -1,4 +1,4 @@
-# Utilities
+ Utilities
 
 A shared Python library containing common tools and utilities for repetitive automation workflows. Managed with `uv`.
 
@@ -29,9 +29,13 @@ All primary functions can be imported directly from the top-level `utilities` pa
 ```python
 from utilities import (
     convert_to_pdf,
+    create_email_draft,
+    find_email,
+    find_emails,
     fnr_detaljer,
     generate_qrcode,
     generate_qrcode_mikaelkirken,
+    get_gmail,
     get_newest_file,
     merge_odt,
 )
@@ -156,6 +160,119 @@ shape: (3, 4)
 │ Ola Nordmann      ┆ 01010561234   ┆ 2005-01-01   ┆ Mann   │
 │ D-nummer Eksempel ┆ 45089212345   ┆ 1992-08-05   ┆ Mann   │
 └───────────────────┴───────────────┴──────────────┴────────┘
+```
+
+---
+
+### 2.6 Gmail Utilities
+
+Tools for searching, reading, and creating email drafts in Gmail via the official Gmail API (backed by `simplegmail`).
+
+#### Setup & Authentication
+
+The Gmail utilities look for authentication credentials in a centralized directory by default:
+
+- **Linux/macOS:** `~/.config/credentials/gmail/`
+- **Windows:** `C:\Users\<Username>\.config\credentials\gmail\`
+
+1. **Google Cloud Console:** Create a project, enable the **Gmail API**, and configure the **Google Auth Platform** (OAuth Consent Screen).  
+   *Tip for Google Workspace:* Set Audience to **Internal** (no verification needed, tokens never expire).
+2. **Credentials:** Create an **OAuth Client ID** of type **Desktop App**, download the JSON file, and save it as:  
+   `~/.config/credentials/gmail/client_secret.json`
+3. **First-time Login:** On the first execution, a browser window opens automatically to authorize your account and generates `gmail_token.json` in the same directory. Subsequent runs are fully automated and headless.
+
+---
+
+#### `get_gmail(creds_dir=None) -> Gmail`
+
+Connects to Gmail using the stored credentials and returns an authenticated `Gmail` client instance.
+
+```python
+from utilities import get_gmail
+
+gmail = get_gmail()
+print(f"Connected as: {gmail.user}")
+```
+
+---
+
+#### `find_email(query=None, sender=None, subject=None, label=None, unread_only=False, client=None) -> Message | None`
+
+Finds the single most recent email matching the given criteria. Returns a `Message` object, or `None` if no matching email was found.
+
+**Key attributes on the returned `Message` object:**
+
+- `email.subject`: Subject line.
+- `email.sender`: Sender's name and email address.
+- `email.plain`: Plain text body.
+- `email.html`: HTML body.
+- `email.attachments`: List of attachment objects.
+- `email.mark_as_read()`: Marks the email as read in Gmail.
+
+```python
+from utilities import find_email
+
+# Find the latest unread signing notification from Dokobit
+email = find_email(
+    sender="notifications@dokobit.com",
+    subject="Dokumentet er signert.",
+    unread_only=True,
+)
+
+if email:
+    print(f"Found email from {email.date}: {email.subject}")
+    print(f"Content:\n{email.plain}")
+
+    # Download attachments if present
+    for att in email.attachments:
+        print(f"Downloading: {att.filename}")
+        att.save()
+
+    # Mark as read so subsequent runs ignore it
+    email.mark_as_read()
+```
+
+---
+
+#### `find_emails(query=None, sender=None, subject=None, label=None, unread_only=False, max_results=None, client=None) -> list[Message]`
+
+Searches for multiple emails matching specific criteria or a raw Gmail search query string. Returns a list of `Message` objects sorted newest first.
+
+```python
+from utilities import find_emails
+
+# Search using filters or standard Gmail search syntax
+messages = find_emails(
+    sender="post@mikaelkirken.no",
+    unread_only=True,
+    max_results=5,
+)
+
+for msg in messages:
+    print(f"[{msg.date}] {msg.subject} (from: {msg.sender})")
+```
+
+---
+
+#### `create_email_draft(to, subject, body_html=None, body_text=None, attachments=None, sender="me", cc=None, bcc=None, client=None) -> EmailDraft`
+
+Creates a draft email directly in your Gmail account. Seamlessly accepts `Path` objects in the `attachments` list.
+
+```python
+from pathlib import Path
+from utilities import convert_to_pdf, create_email_draft
+
+# Pipeline: Convert a letter template to PDF, then draft an email
+pdf_file = convert_to_pdf(Path("kontrakt.odt"))
+
+draft = create_email_draft(
+    to="medlem@mikaelkirken.no",
+    subject="Signert avtale og bekreftelse",
+    body_html="<h3>Hei!</h3><p>Vedlagt oversendes den signerte avtalen i PDF-format.</p>",
+    attachments=[pdf_file],  # Accepts Path objects directly
+)
+
+print(f"Draft created with ID: {draft.id}")
 ```
 
 ---
