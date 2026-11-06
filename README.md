@@ -95,6 +95,22 @@ created_files = merge_odt(
 )
 ```
 
+#### merge_gmail(template_path, data=None, to_column=None, sender=None, send=False, limit=None) -> list[Any]
+
+Performs email mail merges using **Obsidian Markdown** notes (with YAML frontmatter and Jinja2 syntax) combined with tabular data (Excel .xlsx or CSV via Polars). By default, it safely creates **Drafts** in Gmail for review before sending.
+
+- **Obsidian Frontmatter**: Define metadata (subject, to, from, cc, attachments) directly in the markdown note properties.
+- **Smart Mapping**: Automatically handles column names with spaces, dashes, or casing (e.g. {{ e_post_1 }} and {{ row['E-post 1'] }} both work).
+- **RFC 2047 Support**: Automatically encodes Norwegian characters (æ, ø, å) in recipient display names.
+
+```Python
+from utilities import merge_gmail
+
+# Automatically loads the newest export in ~/Downloads and creates Gmail drafts
+merge_gmail("invitasjon_mal.md", limit=5)
+```
+
+> 📖**Comprehensive Guide:** See **[mailmerge_with_obsidian_markdown.md](./mailmerge_with_obsidian_markdown.md)** for a full user manual, practical recipes, Polars data filtering, and advanced template tricks.
 ---
 
 ### 2.4 QR Code Utilities
@@ -165,6 +181,7 @@ shape: (3, 4)
 ---
 
 ### 2.6 Gmail Utilities
+> 💡 *Looking for automated bulk email merging with Markdown templates? See [`merge_gmail`](#23-mail-merge-engine) or check out the [Mailmerge Guide](./mailmerge_with_obsidian_markdown.md).*
 
 Integrates with Gmail via `simplegmail` to search messages, create drafts, and send emails directly.
 

@@ -6,16 +6,368 @@ import re
 import sys
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import openpyxl
 
+import frontmatter
+import csv
+from jinja2 import BaseLoader, Environment
+import markdown
+import polars as pl
+import warnings
+from email.header import Header
+from email.utils import formataddr, parseaddr
 from utilities.files import get_newest_file
 from utilities.pdf import _notify, convert_to_pdf
+from utilities.gmail import create_email_draft, send_email
+
+
+# ---------------------- START jinja2 mailmerge stuff -------------------------------
+
+# Sett opp Jinja-miljø
+_jinja_env = Environment(loader=BaseLoader(), autoescape=False)
+
+
+# ==========================================
+# 1. Datainnlesing
+# ==========================================
+def load_data(
+    source: Path | str | None = None,
+    pattern: str = "Export*.*",
+    search_dirs: Sequence[str] = ("~/syncthing/Downloads", "~/Downloads"),
+) -> pl.DataFrame:
+    """Leser nyeste Excel/CSV-fil eller en oppgitt sti inn i Polars."""
+    if source:
+        file_path = Path(source).expanduser().resolve()
+    else:
+        file_path = None
+        for d in search_dirs:
+            found = get_newest_file(d, pattern)
+            if found:
+                file_path = found
+                break
+
+    if not file_path or not file_path.exists():
+        raise FileNotFoundError(f"Fant ingen datafil: '{source or pattern}'")
+
+    ext = file_path.suffix.lower()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*Could not determine dtype.*")
+        if ext in [".xlsx", ".xls"]:
+            df = pl.read_excel(file_path)
+        elif ext == ".csv":
+            df = pl.read_csv(file_path, infer_schema_length=10000)
+        else:
+            raise ValueError(f"Støtter kun .xlsx, .xls og .csv, fikk: {ext}")
+
+    # Rens kolonnenavn (trimmer usynlige mellomrom)
+    return df.rename({col: str(col).strip() for col in df.columns})
+
+
+# ==========================================
+# 2. Mal og Kontekst
+# ==========================================
+def parse_obsidian_template(path: Path | str) -> tuple[dict[str, Any], str]:
+    """Leser en Obsidian Markdown-fil og returnerer (frontmatter_dict, brødtekst)."""
+    p = Path(path).expanduser().resolve()
+    if not p.exists():
+        raise FileNotFoundError(f"Malfilen finnes ikke: {p}")
+    post = frontmatter.load(p)
+    return post.metadata, post.content
+
+
+def _slugify(text: str) -> str:
+    s = str(text).strip().lower()
+    for ch in ("-", "–", "—", " ", "\t", "\xa0"):
+        s = s.replace(ch, "_")
+    return re.sub(r"_+", "_", s)
+
+
+def prepare_context(row: dict[str, Any]) -> dict[str, Any]:
+    """Gjør raden klar for Jinja2 med universelle oppslag.
+
+    Gjør at f.eks. 'E-post 1', 'e_post_1', 'epost' og 'row[...]'
+    peker til samme verdi.
+    """
+    clean = {str(k).strip(): ("" if v is None else v) for k, v in row.items()}
+    ctx: dict[str, Any] = dict(clean)
+
+    # 1. Små bokstaver og snake_case
+    for k, v in clean.items():
+        ctx[k.lower()] = v
+        ctx[_slugify(k)] = v
+
+    # 2. Synonymer for navn
+    if "fornavn" in ctx and "navn" not in ctx:
+        ctx["navn"] = ctx["fornavn"]
+    elif "navn" in ctx and "fornavn" not in ctx:
+        ctx["fornavn"] = ctx["navn"]
+
+    # 3. Finn e-postverdi på tvers av vanlige kolonnenavn
+    email_val = ""
+    for candidate in (
+        "e_post_1",
+        "e_post",
+        "epost",
+        "email",
+        "e_postadresse",
+        "e_post_foresatt",
+    ):
+        val = str(ctx.get(candidate, "")).strip()
+        if val and "@" in val:
+            email_val = val
+            break
+
+    # Gjør e-postadressen tilgjengelig under alle varianter
+    if email_val:
+        for alias in (
+            "e_post_1",
+            "e_post",
+            "epost",
+            "email",
+            "e_postadresse",
+            "E-post 1",
+            "E-post",
+        ):
+            ctx[alias] = email_val
+            clean[alias] = email_val
+
+    # Råoppslag via row[...] slår opp i den samme vaskede ordboken
+    ctx["row"] = ctx
+    return ctx
+
+
+def markdown_to_html(md_text: str) -> str:
+    """Konverterer Markdown til e-post-HTML."""
+    return markdown.markdown(
+        md_text,
+        extensions=["nl2br", "tables", "fenced_code", "sane_lists"],
+    )
+
+
+def extract_person_label(ctx: dict[str, Any], fallback_idx: int) -> str:
+    """Henter lesbart navn eller ID for pene logger."""
+    f = str(
+        ctx.get("fornavn")
+        or ctx.get("navn")
+        or ctx.get("Fornavn")
+        or ctx.get("Navn")
+        or ""
+    ).strip()
+    e = str(ctx.get("etternavn") or ctx.get("Etternavn") or "").strip()
+    full = f"{f} {e}".strip()
+    if full:
+        return full
+    for k in (
+        "cornerstone_id",
+        "medlemsnummer",
+        "kid",
+        "id",
+        "Cornerstone-ID",
+        "Medlemsnummer",
+        "KID",
+    ):
+        if ctx.get(k):
+            return f"{k}: {ctx[k]}"
+    return f"Rad {fallback_idx}"
+
+
+# ==========================================
+# 3. Payload-bygger
+# ==========================================
+def build_email_payload(
+    meta: dict[str, Any],
+    body_template_str: str,
+    row: dict[str, Any],
+    sender: str | None = None,
+    to_column: str | None = None,
+    compiled: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fletter én enkelt e-post og validerer mottakeradresse."""
+    ctx = prepare_context(row)
+    person = extract_person_label(ctx, 0)
+
+    body_tmpl = (
+        compiled["body"] if compiled else _jinja_env.from_string(body_template_str)
+    )
+    subj_tmpl = (
+        compiled["subject"]
+        if compiled
+        else _jinja_env.from_string(str(meta.get("subject", "")))
+    )
+
+    to_raw = to_column or meta.get("to")
+    if not to_raw:
+        raise ValueError("Mottaker ('to') er ikke oppgitt i malens frontmatter!")
+    to_tmpl = compiled["to"] if compiled else _jinja_env.from_string(str(to_raw))
+
+    # 1. Flett mottaker og formater trygt for norske tegn (æ, ø, å)
+    to_field = to_tmpl.render(ctx).strip()
+    display_name, email_address = parseaddr(to_field)
+
+    if not email_address or "@" not in email_address:
+        raise ValueError(
+            f"Mangler gyldig e-postadresse for '{person}' (fikk: '{to_field}')"
+        )
+
+    # Sikre at særnorske tegn (æ, ø, å) i navnet ikke krasjer Gmail
+    if display_name:
+        try:
+            display_name.encode("ascii")
+            clean_to = f'"{display_name}" <{email_address}>'
+        except UnicodeEncodeError:
+            # RFC 2047 MIME-koding av navn med æ/ø/å
+            encoded_name = Header(display_name, "utf-8").encode()
+            clean_to = f"{encoded_name} <{email_address}>"
+    else:
+        clean_to = email_address
+
+    # 2. Emne
+    subject_field = subj_tmpl.render(ctx).strip()
+    if not subject_field:
+        raise ValueError(f"Emne mangler for '{person}'.")
+
+    # 3. Brødtekst (Markdown -> HTML)
+    rendered_body = body_tmpl.render(ctx)
+    html_body = markdown_to_html(rendered_body)
+
+    # 4. Avsender (Standard er "me")
+    s_val = sender or meta.get("from") or meta.get("sender") or "me"
+    sender_tmpl = (
+        compiled.get("sender")
+        if compiled
+        else (_jinja_env.from_string(str(s_val)) if s_val != "me" else None)
+    )
+    sender_field = sender_tmpl.render(ctx).strip() if sender_tmpl else "me"
+
+    # 5. Kopi (cc)
+    cc_tmpl = (
+        compiled.get("cc")
+        if compiled
+        else (_jinja_env.from_string(str(meta.get("cc", ""))) if "cc" in meta else None)
+    )
+    cc_field = cc_tmpl.render(ctx).strip() if cc_tmpl else None
+
+    # 6. Vedlegg
+    attachments = meta.get("attachments")
+    if isinstance(attachments, str):
+        attachments = [attachments]
+
+    return {
+        "to": clean_to,  # <--- Sender den riktig kodede mottakeren
+        "subject": subject_field,
+        "body_text": rendered_body,
+        "body_html": html_body,
+        "sender": sender_field,
+        "cc": cc_field or None,
+        "attachments": attachments,
+    }
+
+
+# ==========================================
+# 4. Hovedfunksjon for Gmail
+# ==========================================
+def merge_gmail(
+    template_path: Path | str,
+    data: pl.DataFrame | Path | str | None = None,
+    to_column: str | None = None,
+    sender: str | None = None,
+    send: bool = False,
+    limit: int | None = None,
+) -> list[Any]:
+    """Hovedfunksjon: Fletter e-poster og oppretter utkast (eller sender) i Gmail."""
+    df = data if isinstance(data, pl.DataFrame) else load_data(data)
+    if limit:
+        df = df.head(limit)
+
+    if df.is_empty():
+        print("⚠️ Ingen rader å flette.")
+        return []
+
+    meta, body_template = parse_obsidian_template(template_path)
+
+    to_raw = to_column or meta.get("to")
+    if not to_raw:
+        raise ValueError("Mottaker ('to') er ikke spesifisert i malens frontmatter!")
+
+    # Forhåndskompiler malene én gang
+    compiled = {
+        "body": _jinja_env.from_string(body_template),
+        "subject": _jinja_env.from_string(str(meta.get("subject", ""))),
+        "to": _jinja_env.from_string(str(to_raw)),
+        "cc": (
+            _jinja_env.from_string(str(meta.get("cc", ""))) if "cc" in meta else None
+        ),
+    }
+    s_val = sender or meta.get("from") or meta.get("sender")
+    if s_val and s_val != "me":
+        compiled["sender"] = _jinja_env.from_string(str(s_val))
+
+    action = "Sender" if send else "Oppretter utkast for"
+    print(
+        f"✉️ {action} {len(df)} e-post(er) basert på mal: '{Path(template_path).name}'"
+    )
+
+    results = []
+    skipped = 0
+
+    for i, row in enumerate(df.iter_rows(named=True), 1):
+        ctx = prepare_context(row)
+        person = extract_person_label(ctx, i)
+        try:
+            payload = build_email_payload(
+                meta,
+                body_template,
+                row,
+                sender=sender,
+                to_column=to_column,
+                compiled=compiled,
+            )
+
+            try:
+                if send:
+                    res = send_email(**payload)
+                    print(f"  [{i}/{len(df)}] 🚀 Sendt til {payload['to']}")
+                else:
+                    res = create_email_draft(**payload)
+                    print(f"  [{i}/{len(df)}] 📝 Utkast til {payload['to']}")
+                results.append(res)
+            except Exception as google_err:
+                # Hvis Google likevel skulle nekte pga tegnsett i headeren, prøv med ren e-post
+                if "Invalid To header" in str(google_err):
+                    _, pure_email = parseaddr(payload["to"])
+                    if pure_email and "@" in pure_email:
+                        payload["to"] = pure_email
+                        if send:
+                            res = send_email(**payload)
+                            print(
+                                f"  [{i}/{len(df)}] 🚀 Sendt til {payload['to']} ({person})"
+                            )
+                        else:
+                            res = create_email_draft(**payload)
+                            print(
+                                f"  [{i}/{len(df)}] 📝 Utkast til {payload['to']} ({person})"
+                            )
+                        results.append(res)
+                        continue
+                raise google_err
+
+        except Exception as e:
+            skipped += 1
+            print(f"  [{i}/{len(df)}] ⚠️ Hoppet over '{person}': {e}")
+
+    print(
+        f"\n✨ Ferdig! {len(results)} vellykket, {skipped} hoppet over/feilet av totalt {len(df)}."
+    )
+    return results
+
+
+# ---------------------- END jinja2 mailmerge stuff -------------------------------
 
 
 class SafeDict(dict):
-    """Sørger for at manglende kolonner i malen ikke krasjer navneformateringen,
+    """Sørger for at manglende kolonner i malen ikkeikrasjer navneformateringen,
     og tillater treff uavhengig av store/små bokstaver."""
 
     def __getitem__(self, key: str) -> Any:
@@ -127,6 +479,7 @@ def _write_odt(mal_filer: dict[str, bytes], xml_content: str, ut_sti: Path) -> N
                 continue
             innhold = xml_content.encode("utf-8") if fil == "content.xml" else data
             z.writestr(fil, innhold, compress_type=zipfile.ZIP_DEFLATED)
+
 
 def merge_odt(
     template_path: str | Path,
@@ -270,7 +623,6 @@ def merge_odt(
     return genererte_filer
 
 
-
 def cli_merge_odt() -> None:
     """CLI-inngangspunkt for bruk i terminal og MenuLibre (%F)."""
     parser = argparse.ArgumentParser(
@@ -290,7 +642,7 @@ def cli_merge_odt() -> None:
         default="{mal}_{Fornavn}_{Etternavn}",
         help="Navneformat (standard: '{mal}_{Fornavn}_{Etternavn}')",
     )
-    
+
     parser.add_argument(
         "-p", "--pattern", default="Export*.xlsx", help="Mønster for nyeste Excel-fil"
     )

@@ -1,7 +1,7 @@
 """Utilities package."""
 
 from utilities.pdf import convert_to_pdf
-from utilities.merge import merge_odt
+from utilities.merge import merge_odt, merge_gmail
 from utilities.files import get_newest_file
 from utilities.qr import generate_qrcode, generate_qrcode_mikaelkirken
 from .fnr import fnr_detaljer
@@ -19,6 +19,7 @@ __all__ = [
     "generate_qrcode",
     "generate_qrcode_mikaelkirken",
     "merge_odt",
+    merge_gmail,
     "fnr_detaljer",
     "get_gmail",
     "find_emails",
